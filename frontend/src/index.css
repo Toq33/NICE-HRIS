@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-1: #EEF2FF;
+  --bg-2: #F5F3FF;
+  --bg-3: #ECFEFF;
+  --blob-indigo: rgba(79, 70, 229, 0.25);
+  --blob-teal: rgba(20, 184, 166, 0.25);
+  --blob-pink: rgba(236, 72, 153, 0.25);
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-strong: rgba(255, 255, 255, 0.84);
+  --glass-border: rgba(255, 255, 255, 0.72);
+  --blur: blur(16px) saturate(160%);
+  --shadow: 0 8px 32px rgba(31, 38, 135, 0.10);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --radius-card: 20px;
+  --radius-control: 12px;
+  --radius-pill: 999px;
+  --text: #1E293B;
+  --text-2: #475569;
+  --text-muted: #64748B;
+  --primary: #4F46E5;
+  --secondary: #0EA5E9;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --motion: 200ms ease-out;
+}
+
+html,
+body,
+#root {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  margin: 0;
+}
+
+body {
+  background: linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3)) fixed;
+  font-family: Inter, "Noto Sans Bengali", system-ui, sans-serif;
+  color: var(--text);
+}
+
+/* Light Glassmorphism Surfaces (docs/03-design-system.md) */
+.glass {
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow), var(--highlight);
+  transition: transform var(--motion), box-shadow var(--motion), background-color var(--motion);
+}
+
+/* Dense data uses strong glass (>= 0.80 alpha). Never blur per table row. */
+.glass-strong {
+  background: var(--glass-strong);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow), var(--highlight);
+}
+
+.glass-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 36px rgba(31, 38, 135, 0.14), var(--highlight);
+}
+
+/* Mandatory Accessibility & Browser Fallbacks (docs/03-design-system.md) */
+@supports not (backdrop-filter: blur(1px)) {
+  .glass,
+  .glass-strong {
+    background: #ffffff;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .glass-strong {
+    background: #ffffff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

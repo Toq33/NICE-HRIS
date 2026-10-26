@@ -1,0 +1,9 @@
+"""Cursor pagination per docs/04-api-and-integrations.md."""
+from rest_framework.pagination import CursorPagination
+
+
+class StandardCursorPagination(CursorPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+    ordering = "-created_at"
