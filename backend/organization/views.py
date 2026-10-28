@@ -186,7 +186,9 @@ class EmployeeViewSet(CompanyScopedViewSetMixin, viewsets.ModelViewSet):
     filterset_fields = ["company", "branch", "department", "designation", "employment_status"]
 
     def get_queryset(self):
-        qs = Employee.objects.select_related("company", "branch", "department", "designation", "manager").all()
+        qs = Employee.objects.select_related(
+            "company", "branch", "department", "designation", "manager", "role"
+        ).all()
         return self.filter_by_company(qs)
 
     @extend_schema(summary="Bulk import employees with dry_run validation and per-row error reporting (docs/04)")

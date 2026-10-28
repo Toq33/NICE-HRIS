@@ -166,6 +166,9 @@ class Employee(CompanyOwnedModel, SensitiveFieldMixin):
     user = models.OneToOneField(
         "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="employee_profile"
     )
+    role = models.ForeignKey(
+        "accounts.Role", on_delete=models.SET_NULL, null=True, blank=True, related_name="employees"
+    )
 
     # Restricted / Sensitive fields (AGENTS.md Section 7)
     gross_salary_bdt = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))

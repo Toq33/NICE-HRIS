@@ -41,7 +41,16 @@ import {
 const ModuleRouteWrapper: React.FC<{
   lakhGrouping: boolean;
   activeCompanyId: string | null;
-}> = ({ lakhGrouping, activeCompanyId }) => {
+  modulePermissions: Record<string | number, string[]>;
+  userRoleName: string;
+  onPermissionsChanged: () => void;
+}> = ({
+  lakhGrouping,
+  activeCompanyId,
+  modulePermissions,
+  userRoleName,
+  onPermissionsChanged,
+}) => {
   const { num } = useParams<{ num: string }>();
   const modNum = parseInt(num || "1", 10) || 1;
   return (
@@ -49,6 +58,9 @@ const ModuleRouteWrapper: React.FC<{
       moduleNumber={modNum}
       lakhGrouping={lakhGrouping}
       activeCompanyId={activeCompanyId}
+      modulePermissions={modulePermissions}
+      userRoleName={userRoleName}
+      onPermissionsChanged={onPermissionsChanged}
     />
   );
 };
@@ -78,6 +90,23 @@ export const App: React.FC = () => {
   const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
   const [lakhGrouping, setLakhGrouping] = useState(true);
 
+  const refreshSessionAndPersonas = async () => {
+    try {
+      const [meRes, listRes] = await Promise.all([
+        apiFetch("/auth/me/").catch(() => null),
+        apiFetch("/auth/demo-personas/").catch(() => null),
+      ]);
+      if (meRes) {
+        setSession((prev: any) => ({ ...prev, ...meRes }));
+      }
+      if (listRes?.personas) {
+        setPersonas(listRes.personas);
+      }
+    } catch (err) {
+      console.error("Failed to refresh session:", err);
+    }
+  };
+
   const switchPersona = async (email: string) => {
     try {
       const res = await apiFetch("/auth/demo-personas/", {
@@ -89,14 +118,35 @@ export const App: React.FC = () => {
       const firstComp = res.active_company_id || res.companies?.[0]?.id || null;
       setActiveCompanyId(firstComp);
       setActiveCompanyHeader(firstComp);
-      if (res.user?.is_platform_admin && !res.tenant) {
-        navigate("/platform-admin");
-      } else if (res.user?.experience_mode === "EMPLOYEE") {
-        navigate("/m/32/employee-self-service");
-      } else if (res.user?.experience_mode === "MANAGER") {
-        navigate("/m/33/manager-self-service");
-      } else if (location.pathname === "/platform-admin") {
-        navigate("/m/1/management-dashboard");
+
+      const allowedNums = new Set<number>(res.enabled_module_numbers || [1]);
+      const match = location.pathname.match(/^\/m\/(\d+)\//);
+      const currentModNum = match ? parseInt(match[1], 10) : null;
+
+      if (
+        location.pathname === "/platform-admin" &&
+        !res.user?.is_platform_admin &&
+        !res.user?.is_super_admin
+      ) {
+        const fallbackMod =
+          ALL_42_MODULES_CATALOG.find((m) => allowedNums.has(m.number)) ||
+          ALL_42_MODULES_CATALOG[0];
+        navigate(`/m/${fallbackMod.number}/${fallbackMod.slug}`);
+      } else if (currentModNum && !allowedNums.has(currentModNum)) {
+        const preferredOrder =
+          res.user?.experience_mode === "EMPLOYEE"
+            ? [32, 1, 8, 10]
+            : res.user?.experience_mode === "MANAGER"
+            ? [33, 1, 8, 10]
+            : [1, 3, 32];
+        const prefNum =
+          preferredOrder.find((n) => allowedNums.has(n)) ||
+          res.enabled_module_numbers?.[0] ||
+          1;
+        const targetMod =
+          ALL_42_MODULES_CATALOG.find((m) => m.number === prefNum) ||
+          ALL_42_MODULES_CATALOG[0];
+        navigate(`/m/${targetMod.number}/${targetMod.slug}`);
       }
     } catch (err) {
       console.error("Failed to switch persona:", err);
@@ -109,8 +159,9 @@ export const App: React.FC = () => {
         const listRes = await apiFetch("/auth/demo-personas/");
         const personaList = listRes.personas || [];
         setPersonas(personaList);
-        // Default login to Multi-Company Group HR or Single-Company HR Admin so everything is live immediately
+        // Default login to Super Admin (or Group HR Admin) so all 43 modules & permissions are live immediately
         const defaultPersona =
+          personaList.find((p: any) => p.email === "platform.admin@nicehris.bd") ||
           personaList.find((p: any) => p.email === "group.hr@jamunagroup.bd") ||
           personaList.find((p: any) => p.email === "hr.admin@padmaapparel.bd") ||
           personaList[0];
@@ -241,7 +292,7 @@ export const App: React.FC = () => {
               >
                 {personas.map((p) => (
                   <option key={p.id} value={p.email}>
-                    [{p.multi_company_enabled ? "Multi-Co" : p.is_platform_admin ? "Platform" : "Single-Co"}]{" "}
+                    [{p.is_platform_admin ? "Super Admin" : p.role_name || (p.multi_company_enabled ? "Multi-Co" : "Single-Co")}]{" "}
                     {p.tenant_name} — {p.full_name}
                   </option>
                 ))}
@@ -277,16 +328,31 @@ export const App: React.FC = () => {
               <span className="hidden sm:inline">{t("design_system")}</span>
             </Link>
 
-            <Link
-              to="/platform-admin"
-              className="px-2.5 py-1 text-xs font-semibold rounded-control bg-indigo-500/10 border border-indigo-400/30 text-primary hover:bg-indigo-500/20 flex items-center gap-1"
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{t("platform_admin")}</span>
-            </Link>
+            {(session?.user?.is_super_admin || session?.user?.is_admin) && (
+              <Link
+                to="/m/43/roles-permissions-matrix"
+                className="px-2.5 py-1 text-xs font-semibold rounded-control bg-purple-500/10 border border-purple-400/30 text-purple-700 hover:bg-purple-500/20 flex items-center gap-1"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Roles &amp; Permissions</span>
+              </Link>
+            )}
+
+            {(session?.user?.is_platform_admin || session?.user?.is_super_admin) && (
+              <Link
+                to="/platform-admin"
+                className="px-2.5 py-1 text-xs font-semibold rounded-control bg-indigo-500/10 border border-indigo-400/30 text-primary hover:bg-indigo-500/20 flex items-center gap-1"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{t("platform_admin")}</span>
+              </Link>
+            )}
 
             {session?.user && (
               <div className="flex items-center gap-2 pl-1">
+                <span className="hidden lg:inline-block px-2 py-0.5 rounded-pill text-[10px] font-bold bg-indigo-500/15 text-indigo-700 border border-indigo-500/30">
+                  {session.user.role_name || (session.user.is_platform_admin ? "Super Admin" : session.user.experience_mode)}
+                </span>
                 <Avatar name={session.user.full_name} size="sm" />
               </div>
             )}
@@ -311,7 +377,7 @@ export const App: React.FC = () => {
                   type="text"
                   value={moduleSearch}
                   onChange={(e) => setModuleSearch(e.target.value)}
-                  placeholder="Jump to 42 modules (Ctrl+K)..."
+                  placeholder="Jump to 43 modules (Ctrl+K)..."
                   className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white/85 border border-slate-200 rounded-control focus:outline-none focus:ring-2 focus:ring-primary/40"
                 />
               </div>
@@ -388,6 +454,20 @@ export const App: React.FC = () => {
                 <ModuleRouteWrapper
                   lakhGrouping={lakhGrouping}
                   activeCompanyId={activeCompanyId}
+                  modulePermissions={
+                    session?.module_permissions ||
+                    Object.fromEntries(
+                      ALL_42_MODULES_CATALOG.map((m) => [
+                        m.number,
+                        ["view", "create", "edit", "delete"],
+                      ])
+                    )
+                  }
+                  userRoleName={
+                    session?.user?.role_name ||
+                    (session?.user?.is_platform_admin ? "Super Admin" : "User")
+                  }
+                  onPermissionsChanged={refreshSessionAndPersonas}
                 />
               }
             />
@@ -398,12 +478,14 @@ export const App: React.FC = () => {
       {/* Mobile PWA Bottom Navigation Bar (docs/03 & docs/06: Home, Attendance, Leaves, Directory, More) */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 glass-strong rounded-none border-t border-white/80 px-3 py-2 flex items-center justify-around">
         {[
-          { to: "/m/32/employee-self-service", label: "Home (ESS)", icon: Home },
-          { to: "/m/8/attendance", label: "Attendance", icon: Clock },
-          { to: "/m/10/leave", label: "Leaves", icon: Calendar },
-          { to: "/m/3/employee-information", label: "Directory", icon: Users },
-          { to: "/m/1/management-dashboard", label: "Dashboard", icon: LayoutDashboard },
-        ].map((item) => {
+          { num: 32, to: "/m/32/employee-self-service", label: "Home (ESS)", icon: Home },
+          { num: 8, to: "/m/8/attendance", label: "Attendance", icon: Clock },
+          { num: 10, to: "/m/10/leave", label: "Leaves", icon: Calendar },
+          { num: 3, to: "/m/3/employee-information", label: "Directory", icon: Users },
+          { num: 1, to: "/m/1/management-dashboard", label: "Dashboard", icon: LayoutDashboard },
+        ]
+          .filter((item) => enabledSet.has(item.num))
+          .map((item) => {
           const Icon = item.icon;
           const active = location.pathname === item.to;
           return (

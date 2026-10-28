@@ -108,7 +108,9 @@ class Role(TenantModel):
 
     name = models.CharField(max_length=100)
     code = models.SlugField(max_length=60)
+    badge_label = models.CharField(max_length=80, blank=True, default="Custom Role")
     description = models.TextField(blank=True, default="")
+    display_order = models.PositiveSmallIntegerField(default=10)
     is_system_role = models.BooleanField(default=False)
     can_view_confidential_salary = models.BooleanField(default=False)
     can_view_confidential_medical = models.BooleanField(default=False)
@@ -117,7 +119,7 @@ class Role(TenantModel):
     class Meta:
         unique_together = [("tenant", "code")]
         indexes = [models.Index(fields=["tenant", "code"])]
-        ordering = ["name"]
+        ordering = ["display_order", "name"]
 
     def __str__(self) -> str:
         return f"{self.name} ({self.code})"

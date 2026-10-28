@@ -730,6 +730,22 @@ ALL_42_MODULES: list[ModuleSpec] = [
         "key_rules": "Everything configurable per tenant",
         "phase": "0, 1",
     },
+    {
+        "number": 43,
+        "slug": "roles-permissions-matrix",
+        "name": "Roles & Permissions Matrix",
+        "group": "Governance & Platform",
+        "submodules": [
+            "Role creation (+ Add Role)",
+            "Granular 43-module permission matrix",
+            "View / Create / Edit / Delete toggles",
+            "Access coverage % calculation",
+            "Super Admin & Admin only access",
+            "Employee role assignment on onboarding",
+        ],
+        "key_rules": "Accessible ONLY by Super Admin and Admin; controls module access & action permissions per role",
+        "phase": "1, 6",
+    },
 ]
 
 MODULES_BY_NUMBER = {m["number"]: m for m in ALL_42_MODULES}

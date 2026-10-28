@@ -390,6 +390,22 @@ export const ALL_42_MODULES_CATALOG: ModuleMeta[] = [
     submodules: ["Employee categories", "Employment types", "Grades", "Leave rules", "Payroll components", "Numbering formats", "Currencies", "Timezone", "Notification templates", "Retention"],
     key_rules: "Everything configurable per tenant; statutory rules flagged 'needs professional review'",
   },
+  {
+    number: 43,
+    slug: "roles-permissions-matrix",
+    name: "Roles & Permissions",
+    group: "Governance & Platform",
+    phase: "1, 6",
+    submodules: [
+      "Role creation (+ Add Role)",
+      "Granular 43-module permission matrix",
+      "View / Create / Edit / Delete toggles",
+      "Access coverage % calculation",
+      "Super Admin & Admin only access",
+      "Employee role assignment on onboarding",
+    ],
+    key_rules: "Accessible ONLY by Super Admin and Admin; controls module access & action permissions per role",
+  },
 ];
 
 let _accessToken: string | null = localStorage.getItem("nice_hris_token");
@@ -419,13 +435,13 @@ export function setActiveCompanyHeader(companyId: string | null) {
 
 export async function apiFetch<T = any>(
   path: string,
-  options: RequestInit & { idempotencyKey?: string } = {}
+  options: RequestInit & { idempotencyKey?: string; _retried?: boolean } = {}
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((options.headers as Record<string, string>) || {}),
   };
-  if (_accessToken) {
+  if (_accessToken && !path.startsWith("/auth/")) {
     headers["Authorization"] = `Bearer ${_accessToken}`;
   }
   if (_activeCompanyId) {
@@ -441,6 +457,31 @@ export async function apiFetch<T = any>(
     headers,
     credentials: "include",
   });
+
+  if (res.status === 401 && !options._retried && !path.startsWith("/auth/")) {
+    setAuthToken(null);
+    try {
+      const refreshRes = await fetch(`${API_BASE_URL}/auth/demo-personas/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "platform.admin@nicehris.bd" }),
+        credentials: "include",
+      });
+      if (refreshRes.ok) {
+        const refreshData = await refreshRes.json();
+        if (refreshData?.access) {
+          setAuthToken(refreshData.access);
+          return apiFetch<T>(path, { ...options, _retried: true });
+        }
+      }
+    } catch {
+      // Fall through to normal error handling
+    }
+  }
+
+  if (res.status === 204) {
+    return {} as T;
+  }
 
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));

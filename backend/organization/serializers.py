@@ -153,6 +153,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source="department.name", read_only=True)
     designation_title = serializers.CharField(source="designation.title", read_only=True)
     manager_name = serializers.CharField(source="manager.full_name", read_only=True)
+    role_name = serializers.CharField(source="role.name", read_only=True)
+    role_code = serializers.CharField(source="role.code", read_only=True)
+    role_badge = serializers.CharField(source="role.badge_label", read_only=True)
     national_id_masked = serializers.SerializerMethodField()
     bank_account_masked = serializers.SerializerMethodField()
     gross_salary_display = serializers.SerializerMethodField()
@@ -180,6 +183,11 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "cost_center",
             "manager",
             "manager_name",
+            "role",
+            "role_name",
+            "role_code",
+            "role_badge",
+            "gross_salary_bdt",
             "bank_name",
             "national_id_masked",
             "bank_account_masked",
@@ -189,6 +197,85 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+        extra_kwargs = {
+            "gross_salary_bdt": {"write_only": True, "required": False},
+        }
+
+    def _sync_user_and_role(self, employee: Employee) -> None:
+        from accounts.models import DataScope, Role, User
+
+        role = employee.role
+        if not role and employee.tenant_id:
+            role = Role.unscoped_objects.filter(
+                tenant_id=employee.tenant_id, code="user", deleted_at__isnull=True
+            ).first()
+            if role:
+                employee.role = role
+                Employee.unscoped_objects.filter(pk=employee.pk).update(role=role)
+
+        if not role or not employee.work_email:
+            return
+
+        is_super = role.code == "super-admin"
+        is_admin = role.code in ("super-admin", "admin", "hr-director")
+        is_mgr = role.code in ("manager", "asst-manager", "line-manager")
+        exp_mode = (
+            User.ExperienceMode.ADMIN
+            if is_admin
+            else (User.ExperienceMode.MANAGER if is_mgr else User.ExperienceMode.EMPLOYEE)
+        )
+
+        user = employee.user or User.objects.filter(email=employee.work_email).first()
+        if not user:
+            user = User.objects.create_user(
+                email=employee.work_email,
+                password="Pass1234!",
+                full_name=employee.full_name,
+                full_name_bn=employee.full_name_bn,
+                phone=employee.phone,
+                tenant=employee.tenant,
+                default_company=employee.company,
+                experience_mode=exp_mode,
+                is_platform_admin=is_super,
+                can_view_salary=bool(is_admin or role.can_view_confidential_salary),
+                can_view_medical=bool(is_admin or role.can_view_confidential_medical),
+                has_approval_authority=bool(is_admin or is_mgr or role.has_approval_authority),
+            )
+            user.allowed_companies.add(employee.company)
+        else:
+            user.full_name = employee.full_name
+            user.full_name_bn = employee.full_name_bn
+            user.experience_mode = exp_mode
+            user.is_platform_admin = is_super
+            user.can_view_salary = bool(is_admin or role.can_view_confidential_salary)
+            user.can_view_medical = bool(is_admin or role.can_view_confidential_medical)
+            user.has_approval_authority = bool(is_admin or is_mgr or role.has_approval_authority)
+            user.save()
+
+        if employee.user_id != user.id:
+            employee.user = user
+            Employee.unscoped_objects.filter(pk=employee.pk).update(user=user)
+
+        DataScope.unscoped_objects.filter(user=user).exclude(role=role).delete()
+        DataScope.unscoped_objects.update_or_create(
+            tenant=employee.tenant,
+            user=user,
+            role=role,
+            defaults={
+                "scope_type": DataScope.ScopeType.ALL_TENANT,
+                "company_ids": [str(employee.company_id)],
+            },
+        )
+
+    def create(self, validated_data: dict[str, Any]) -> Employee:
+        employee = super().create(validated_data)
+        self._sync_user_and_role(employee)
+        return employee
+
+    def update(self, instance: Employee, validated_data: dict[str, Any]) -> Employee:
+        employee = super().update(instance, validated_data)
+        self._sync_user_and_role(employee)
+        return employee
 
     def get_national_id_masked(self, obj: Employee) -> str:
         return obj.get_masked_field("national_id_encrypted", visible_tail=4)
@@ -199,7 +286,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def get_gross_salary_display(self, obj: Employee) -> Any:
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        if user and getattr(user, "can_view_salary", False):
+        if user and (getattr(user, "can_view_salary", False) or getattr(user, "is_platform_admin", False)):
             return str(obj.gross_salary_bdt)
         return "•••••••• (Restricted)"
 

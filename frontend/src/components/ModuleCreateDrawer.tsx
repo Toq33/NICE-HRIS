@@ -53,6 +53,7 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
     requisitions: any[];
     payrollRuns: any[];
     workflows: any[];
+    roles: any[];
   }>({
     employees: [],
     companies: [],
@@ -64,6 +65,7 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
     requisitions: [],
     payrollRuns: [],
     workflows: [],
+    roles: [],
   });
 
   const unwrap = (res: any) => (Array.isArray(res) ? res : res?.results || []);
@@ -73,37 +75,41 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
     setError(null);
     (async () => {
       try {
-        const [emps, comps, brs, depts, lt, des, cal, reqs, runs, wfs] =
+        const safeLookup = (url: string) => apiFetch(url).catch(() => []);
+        const [emps, comps, brs, depts, lt, des, cal, reqs, runs, wfs, rls] =
           await Promise.all([
             employees.length > 0
               ? Promise.resolve(employees)
-              : apiFetch("/employees/"),
+              : safeLookup("/employees/?lookup=1"),
             companies.length > 0
               ? Promise.resolve(companies)
-              : apiFetch("/organization/companies/"),
+              : safeLookup("/organization/companies/?lookup=1"),
             branches.length > 0
               ? Promise.resolve(branches)
-              : apiFetch("/organization/branches/"),
+              : safeLookup("/organization/branches/?lookup=1"),
             departments.length > 0
               ? Promise.resolve(departments)
-              : apiFetch("/organization/departments/"),
+              : safeLookup("/organization/departments/?lookup=1"),
             moduleNumber === 10 || moduleNumber === 32 || moduleNumber === 33
-              ? apiFetch("/time/leave-types/")
+              ? safeLookup("/time/leave-types/?lookup=1")
               : Promise.resolve([]),
             moduleNumber === 3 || moduleNumber === 24
-              ? apiFetch("/organization/designations/")
+              ? safeLookup("/organization/designations/?lookup=1")
               : Promise.resolve([]),
             moduleNumber === 11
-              ? apiFetch("/time/calendars/")
+              ? safeLookup("/time/calendars/?lookup=1")
               : Promise.resolve([]),
             moduleNumber === 5
-              ? apiFetch("/talent/requisitions/")
+              ? safeLookup("/talent/requisitions/?lookup=1")
               : Promise.resolve([]),
             moduleNumber === 21
-              ? apiFetch("/payroll/runs/")
+              ? safeLookup("/payroll/runs/?lookup=1")
               : Promise.resolve([]),
             moduleNumber === 1 || moduleNumber === 37
-              ? apiFetch("/workflows/definitions/")
+              ? safeLookup("/workflows/definitions/?lookup=1")
+              : Promise.resolve([]),
+            moduleNumber === 3 || moduleNumber === 39 || moduleNumber === 43
+              ? safeLookup("/accounts/roles/?lookup=1")
               : Promise.resolve([]),
           ]);
         setAuxData({
@@ -117,6 +123,7 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
           requisitions: unwrap(reqs),
           payrollRuns: unwrap(runs),
           workflows: unwrap(wfs),
+          roles: unwrap(rls),
         });
       } catch {
         // Ignore auxiliary fetch errors
@@ -153,6 +160,16 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
     value: String(lt.id),
     label: `${lt.name} (${lt.code})`,
   }));
+  const roleOptions = auxData.roles.map((r) => ({
+    value: String(r.id),
+    label: `${r.name} — ${r.badge_label || r.code}`,
+  }));
+  const defaultRoleId =
+    auxData.roles.find((r) => r.code === "user")?.id
+      ? String(auxData.roles.find((r) => r.code === "user").id)
+      : auxData.roles[0]?.id
+      ? String(auxData.roles[0].id)
+      : "";
 
   const defaultEmpId = effectiveEmployees[0]?.id
     ? String(effectiveEmployees[0].id)
@@ -409,6 +426,9 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
           ...(desigOptions.length
             ? [{ key: "designation", label: "Designation", type: "select" as const, options: desigOptions, defaultValue: defaultDesigId }]
             : []),
+          ...(roleOptions.length
+            ? [{ key: "role", label: "Assigned Role (Access & Permissions)", type: "select" as const, options: roleOptions, defaultValue: defaultRoleId, required: true }]
+            : []),
           { key: "gross_salary_bdt", label: "Monthly Gross Salary (BDT)", type: "number", defaultValue: "60000", required: true },
         ],
         buildPayload: (v) => ({
@@ -423,6 +443,7 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
           branch: defaultBranchId,
           department: v.department || defaultDeptId,
           designation: v.designation || defaultDesigId,
+          role: v.role || defaultRoleId || null,
           gross_salary_bdt: v.gross_salary_bdt || "60000.00",
         }),
       };
@@ -1329,20 +1350,35 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
       };
     }
 
-    // MODULE 39: USERS, ROLES & PERMISSIONS
-    if (moduleNumber === 39) {
+    // MODULE 39 & 43: USERS, ROLES & PERMISSIONS
+    if (moduleNumber === 39 || moduleNumber === 43) {
       return {
-        title: "Create Security Role (Module 39)",
+        title: "Create New Role (+ Add Role)",
         endpoint: "/accounts/roles/",
         fields: [
-          { key: "code", label: "Role Code", placeholder: "e.g. branch-hr-officer", required: true },
           { key: "name", label: "Role Name", placeholder: "e.g. Branch HR Officer", required: true },
+          { key: "badge_label", label: "Role Badge Label", defaultValue: "Custom Role", required: true },
           { key: "description", label: "Role Responsibilities & Scope", placeholder: "Branch-level employee & attendance access", required: true },
+          {
+            key: "template_role_code",
+            label: "Copy Initial Permissions From",
+            type: "select",
+            defaultValue: "user",
+            options: [
+              { value: "user", label: "User (Standard Employee)" },
+              { value: "support", label: "Support (Helpdesk & Ops)" },
+              { value: "developer", label: "Developer (IT & Integrations)" },
+              { value: "asst-manager", label: "Asst. Manager (Team Supervisor)" },
+              { value: "manager", label: "Manager (Department Lead)" },
+              { value: "admin", label: "Admin (100% Full Access)" },
+            ],
+          },
         ],
         buildPayload: (v) => ({
-          code: v.code,
           name: v.name,
+          badge_label: v.badge_label || "Custom Role",
           description: v.description,
+          template_role_code: v.template_role_code || "user",
           can_view_confidential_salary: false,
           has_approval_authority: true,
         }),
@@ -1436,6 +1472,7 @@ export const ModuleCreateDrawer: React.FC<ModuleCreateDrawerProps> = ({
     effectiveBranches.length,
     auxData.leaveTypes.length,
     auxData.designations.length,
+    auxData.roles.length,
   ]);
 
   const handleSubmit = async (e: React.FormEvent) => {

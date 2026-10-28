@@ -1,16 +1,35 @@
-import React, { useState } from "react";
+import React, { useContext, useState } from "react";
 import {
   CheckCircle2,
   ChevronRight,
   Clock,
   FileUp,
   Inbox,
+  Pencil,
   Search,
   Sparkles,
+  Trash2,
   X,
   AlertTriangle,
   XCircle,
 } from "lucide-react";
+
+export interface ModulePermissionContextValue {
+  canView: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  onEditRow?: (row: any) => void;
+  onDeleteRow?: (row: any) => void;
+}
+
+export const ModulePermissionContext =
+  React.createContext<ModulePermissionContextValue>({
+    canView: true,
+    canCreate: true,
+    canEdit: true,
+    canDelete: true,
+  });
 
 /**
  * 1. GlassCard (Light Glass surface for shell, dashboard cards, side panels)
@@ -333,6 +352,21 @@ export function DataTable<T extends Record<string, any>>({
   emptyMessage?: string;
 }) {
   const [query, setQuery] = useState("");
+  const permCtx = useContext(ModulePermissionContext);
+  const sampleRow: Record<string, any> = data[0] || {};
+  const isImmutableLedger =
+    "actor_email" in sampleRow ||
+    "source_type" in sampleRow ||
+    "contribution_type" in sampleRow;
+  const hasRowIds = Boolean(sampleRow && sampleRow.id);
+  const showCrudCol =
+    hasRowIds &&
+    !isImmutableLedger &&
+    Boolean(
+      (permCtx.canEdit && permCtx.onEditRow) ||
+        (permCtx.canDelete && permCtx.onDeleteRow)
+    );
+
   const filtered = data.filter((row) =>
     !query
       ? true
@@ -368,13 +402,16 @@ export function DataTable<T extends Record<string, any>>({
                   {col.header}
                 </th>
               ))}
+              {showCrudCol && (
+                <th className="py-2 px-3.5 text-right">Manage</th>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200/60 text-xs bg-white/80">
             {filtered.length === 0 ? (
               <tr>
                 <td
-                  colSpan={columns.length}
+                  colSpan={columns.length + (showCrudCol ? 1 : 0)}
                   className="py-6 text-center text-muted text-xs"
                 >
                   {emptyMessage}
@@ -391,6 +428,34 @@ export function DataTable<T extends Record<string, any>>({
                       {col.render ? col.render(row) : String(row[col.key] ?? "—")}
                     </td>
                   ))}
+                  {showCrudCol && (
+                    <td className="py-2 px-3.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {permCtx.canEdit && permCtx.onEditRow && (
+                          <button
+                            type="button"
+                            onClick={() => permCtx.onEditRow?.(row)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-indigo-500/10 text-primary border border-indigo-500/25 hover:bg-indigo-500/20 transition-colors"
+                            title="Edit Record"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        )}
+                        {permCtx.canDelete && permCtx.onDeleteRow && (
+                          <button
+                            type="button"
+                            onClick={() => permCtx.onDeleteRow?.(row)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-red-500/10 text-red-700 border border-red-500/25 hover:bg-red-500/20 transition-colors"
+                            title="Delete Record"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))
             )}

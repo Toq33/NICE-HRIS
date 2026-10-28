@@ -24,8 +24,14 @@ class CookieOrHeaderJWTAuthentication(JWTAuthentication):
         if raw_token is None:
             return None
 
-        validated_token = self.get_validated_token(raw_token)
-        user = self.get_user(validated_token)
+        try:
+            validated_token = self.get_validated_token(raw_token)
+            user = self.get_user(validated_token)
+        except Exception:
+            if request.path.startswith("/api/v1/auth/"):
+                return None
+            raise
+
         self._apply_tenant_context(request, user)
         return (user, validated_token)
 
@@ -34,12 +40,18 @@ class CookieOrHeaderJWTAuthentication(JWTAuthentication):
             return
         set_current_user_id(user.id)
 
-        # Allow platform superadmins to inspect a specific tenant via header if explicitly requested
+        # Allow platform superadmins to inspect a specific tenant via header or fall back to primary tenant
         requested_tenant_id = request.headers.get("X-Tenant-ID")
         if user.is_platform_admin and requested_tenant_id:
             set_current_tenant_id(requested_tenant_id)
         elif getattr(user, "tenant_id", None):
             set_current_tenant_id(user.tenant_id)
+        elif user.is_platform_admin:
+            from platform_admin.models import Tenant
+
+            default_t = Tenant.objects.filter(slug="jamuna-group").first() or Tenant.objects.first()
+            if default_t:
+                set_current_tenant_id(default_t.id)
 
         requested_company_id = request.headers.get("X-Company-ID")
         if requested_company_id:

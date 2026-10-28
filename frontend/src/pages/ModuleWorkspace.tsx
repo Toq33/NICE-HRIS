@@ -10,6 +10,7 @@ import {
   KanbanBoard,
   KPITile,
   Modal,
+  ModulePermissionContext,
   OrgChartNode,
   PivotTable,
   SignatureBlock,
@@ -19,6 +20,7 @@ import {
   Tabs,
 } from "../components/glass";
 import { ModuleCreateDrawer } from "../components/ModuleCreateDrawer";
+import { RolesPermissionsMatrixView } from "../components/RolesPermissionsMatrixView";
 import { ALL_42_MODULES_CATALOG, apiDownloadFile, apiFetch } from "../lib/api";
 import { formatBDT } from "../i18n";
 import {
@@ -61,16 +63,34 @@ interface WorkspaceProps {
   moduleNumber: number;
   lakhGrouping: boolean;
   activeCompanyId: string | null;
+  modulePermissions?: Record<string | number, string[]>;
+  userRoleName?: string;
+  onPermissionsChanged?: () => void;
 }
 
 export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
   moduleNumber,
   lakhGrouping,
   activeCompanyId,
+  modulePermissions,
+  userRoleName = "Super Admin",
+  onPermissionsChanged,
 }) => {
   const mod =
     ALL_42_MODULES_CATALOG.find((m) => m.number === moduleNumber) ||
     ALL_42_MODULES_CATALOG[0];
+
+  const rawAllowedActions =
+    modulePermissions?.[moduleNumber] ||
+    modulePermissions?.[String(moduleNumber)] ||
+    ["view", "create", "edit", "delete"];
+  const allowedActionSet = new Set(
+    rawAllowedActions.map((a) => String(a).toLowerCase())
+  );
+  const canView = allowedActionSet.has("view");
+  const canCreate = allowedActionSet.has("create");
+  const canEdit = allowedActionSet.has("edit");
+  const canDelete = allowedActionSet.has("delete");
 
   const [loading, setLoading] = useState(false);
   const [dashboardData, setDashboardData] = useState<any>(null);
@@ -141,6 +161,9 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
   const [rejectReason, setRejectReason] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<any | null>(null);
+  const [editFormValues, setEditFormValues] = useState<Record<string, any>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const notify = (msg: string) => {
     setToastMessage(msg);
@@ -149,13 +172,214 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
 
   const unwrap = (res: any) => (Array.isArray(res) ? res : res?.results || []);
 
+  const resolveRowEndpoint = (row: any): string | null => {
+    if (!row || !row.id) return null;
+    if (moduleNumber === 1) return "/workflows/approvals/";
+    if (moduleNumber === 2) {
+      if (activeTab === "companies") return "/organization/companies/";
+      if (activeTab === "branches") return "/organization/branches/";
+      if (activeTab === "departments") return "/organization/departments/";
+      return "/employees/";
+    }
+    if (moduleNumber === 3 || moduleNumber === 32 || moduleNumber === 33) {
+      if (moduleNumber === 32 || moduleNumber === 33) return "/time/attendance-days/";
+      if (activeTab === "family") {
+        return "nominee_share_pct" in row
+          ? "/employees/family-members/"
+          : "/employees/emergency-contacts/";
+      }
+      if (activeTab === "qualifications") {
+        return "degree_or_certification" in row
+          ? "/employees/qualifications/"
+          : "/employees/experiences/";
+      }
+      if (activeTab === "contracts") return "/employees/employment-records/";
+      if (activeTab === "documents") return "/employees/documents/";
+      return "/employees/";
+    }
+    if (moduleNumber === 4) return "/talent/manpower-plans/";
+    if (moduleNumber === 5) return "/talent/applicants/";
+    if (moduleNumber === 6) return "/talent/onboarding/";
+    if (moduleNumber === 7) return "/talent/probation-reviews/";
+    if (moduleNumber === 8) {
+      return activeTab === "daily"
+        ? "/time/attendance-days/"
+        : "/time/attendance-summaries/";
+    }
+    if (moduleNumber === 9) {
+      return "start_time" in row ? "/time/shifts/" : "/time/roster-batches/";
+    }
+    if (moduleNumber === 10) {
+      return activeTab === "primary" ? "/time/leave-requests/" : null;
+    }
+    if (moduleNumber === 11) return "/time/holidays/";
+    if (moduleNumber === 12) return "/time/overtime-requests/";
+    if (moduleNumber === 13) return "/time/field-duty/";
+    if (moduleNumber === 14) return "/payroll/salary-structures/";
+    if (moduleNumber === 15 || moduleNumber === 22) return "/payroll/payslips/";
+    if (moduleNumber === 16) return "/payroll/bonuses/";
+    if (moduleNumber === 17) return "/payroll/expense-claims/";
+    if (moduleNumber === 18) return "/payroll/loans/";
+    if (moduleNumber === 20) {
+      return "slab_order" in row
+        ? "/payroll/tax-slabs/"
+        : "/payroll/statutory-schemes/";
+    }
+    if (moduleNumber === 21) return "/payroll/payment-batches/";
+    if (moduleNumber === 23) return "/talent/appraisals/";
+    if (moduleNumber === 24) return "/talent/career-movements/";
+    if (moduleNumber === 25) return "/talent/trainings/";
+    if (moduleNumber === 26) return "/relations/grievances/";
+    if (moduleNumber === 27) return "/relations/disciplinary/";
+    if (moduleNumber === 28) return "/relations/assets/";
+    if (moduleNumber === 29) return "/relations/health-safety/";
+    if (moduleNumber === 30) return "/relations/resignations/";
+    if (moduleNumber === 31) return "/relations/final-settlements/";
+    if (moduleNumber === 34) return "/helpdesk/tickets/";
+    if (moduleNumber === 35) {
+      return "template_name" in row
+        ? "/policies/generated-letters/"
+        : "/policies/documents/";
+    }
+    if (moduleNumber === 36) return "/communications/announcements/";
+    if (moduleNumber === 37) return "/workflows/approvals/";
+    if (moduleNumber === 38) return "/reports/definitions/";
+    if (moduleNumber === 39) {
+      return "email" in row ? "/accounts/users/" : "/accounts/roles/";
+    }
+    if (moduleNumber === 41) {
+      if ("key_prefix" in row) return "/integrations/api-keys/";
+      if ("target_url" in row) return "/integrations/webhooks/";
+      return "/integrations/connectors/";
+    }
+    if (moduleNumber === 42) {
+      return "next_val" in row
+        ? "/settings/number-sequences/"
+        : "/settings/tenant-config/";
+    }
+    return null;
+  };
+
+  const handleOpenEditRow = (row: any) => {
+    if (!canEdit) {
+      notify("Your role does not have EDIT permission on this module.");
+      return;
+    }
+    const skipKeys = new Set([
+      "id",
+      "tenant",
+      "company",
+      "branch",
+      "department",
+      "designation",
+      "grade",
+      "employee",
+      "user",
+      "role",
+      "manager",
+      "leave_type",
+      "payroll_run",
+      "period",
+      "shift",
+      "requisition",
+      "requester",
+      "handler",
+      "complainant",
+      "assigned_to",
+      "default_company",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "permissions",
+      "key_prefix",
+    ]);
+    const initial: Record<string, any> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (skipKeys.has(k)) continue;
+      if (
+        k.endsWith("_name") ||
+        k.endsWith("_masked") ||
+        k.endsWith("_display") ||
+        k.endsWith("_count") ||
+        k.endsWith("_in_words") ||
+        k.endsWith("_title") ||
+        k.endsWith("_code") && k !== "employee_code" && k !== "connector_code" && k !== "code"
+      ) {
+        continue;
+      }
+      if (
+        typeof v === "string" ||
+        typeof v === "number" ||
+        typeof v === "boolean"
+      ) {
+        initial[k] = v;
+      }
+    }
+    setEditingRow(row);
+    setEditFormValues(initial);
+  };
+
+  const handleSaveEditRow = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRow || !canEdit) return;
+    const ep = resolveRowEndpoint(editingRow);
+    if (!ep) {
+      notify("This record type is read-only.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await apiFetch(`${ep}${editingRow.id}/`, {
+        method: "PATCH",
+        body: JSON.stringify(editFormValues),
+      });
+      notify("Record updated successfully!");
+      setEditingRow(null);
+      loadModuleData();
+      if (moduleNumber === 3 || moduleNumber === 39) {
+        onPermissionsChanged?.();
+      }
+    } catch (err: any) {
+      notify(err.message || "Failed to update record.");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeleteRow = async (row: any) => {
+    if (!canDelete) {
+      notify("Your role does not have DELETE permission on this module.");
+      return;
+    }
+    const ep = resolveRowEndpoint(row);
+    if (!ep) {
+      notify("This record cannot be deleted.");
+      return;
+    }
+    try {
+      await apiFetch(`${ep}${row.id}/`, { method: "DELETE" });
+      notify("Record deleted successfully.");
+      loadModuleData();
+      if (moduleNumber === 3 || moduleNumber === 39) {
+        onPermissionsChanged?.();
+      }
+    } catch (err: any) {
+      notify(err.message || "Failed to delete record.");
+    }
+  };
+
   const loadModuleData = async () => {
+    if (!canView) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    const safeFetch = (url: string) => apiFetch(url).catch(() => []);
     try {
       if (moduleNumber === 1) {
         const [dash, appr] = await Promise.all([
           apiFetch("/dashboard/summary/"),
-          apiFetch("/workflows/approvals/"),
+          safeFetch("/workflows/approvals/"),
         ]);
         setDashboardData(dash);
         setApprovals(unwrap(appr));
@@ -164,7 +388,7 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
           apiFetch("/organization/companies/"),
           apiFetch("/organization/branches/"),
           apiFetch("/organization/departments/"),
-          apiFetch("/employees/"),
+          safeFetch("/employees/?lookup=1"),
         ]);
         setCompanies(unwrap(c));
         setBranches(unwrap(b));
@@ -173,15 +397,15 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
       } else if (moduleNumber === 3 || moduleNumber === 32 || moduleNumber === 33) {
         const [e, l, p, a, ec, fm, eq, ex, er, ed] = await Promise.all([
           apiFetch("/employees/"),
-          apiFetch("/time/leave-requests/"),
-          apiFetch("/payroll/payslips/"),
-          apiFetch("/time/attendance-days/"),
-          apiFetch("/employees/emergency-contacts/"),
-          apiFetch("/employees/family-members/"),
-          apiFetch("/employees/qualifications/"),
-          apiFetch("/employees/experiences/"),
-          apiFetch("/employees/employment-records/"),
-          apiFetch("/employees/documents/"),
+          safeFetch("/time/leave-requests/"),
+          safeFetch("/payroll/payslips/"),
+          safeFetch("/time/attendance-days/"),
+          safeFetch("/employees/emergency-contacts/"),
+          safeFetch("/employees/family-members/"),
+          safeFetch("/employees/qualifications/"),
+          safeFetch("/employees/experiences/"),
+          safeFetch("/employees/employment-records/"),
+          safeFetch("/employees/documents/"),
         ]);
         setEmployees(unwrap(e));
         setLeaveRequests(unwrap(l));
@@ -328,7 +552,7 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
   useEffect(() => {
     setActiveTab("primary");
     loadModuleData();
-  }, [moduleNumber, activeCompanyId]);
+  }, [moduleNumber, activeCompanyId, canView]);
 
   const handleMobileCheckIn = async (punchType: "IN" | "OUT") => {
     try {
@@ -421,61 +645,113 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
   const currentEmp = employees[empIndex] || employees[0];
 
   return (
-    <div className="h-full flex flex-col gap-3 overflow-y-auto pr-0.5">
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 glass-strong px-4 py-3 border-l-4 border-l-primary text-xs font-semibold text-ink shadow-xl flex items-center gap-3">
-          <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
-          <span>{toastMessage}</span>
-          {undoAction && (
-            <button
-              onClick={() => {
-                undoAction();
-                setUndoAction(null);
-                setToastMessage(null);
-              }}
-              className="px-2 py-0.5 rounded bg-indigo-500/15 text-primary font-bold hover:bg-indigo-500/25"
-            >
-              Undo
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Module Header Banner */}
-      <GlassCard className="shrink-0 py-2.5 px-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="space-y-0.5 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="px-2 py-0.5 text-[11px] font-bold rounded-pill bg-primary text-white">
-              Module #{mod.number}
-            </span>
-            <span className="px-2 py-0.5 text-[11px] font-semibold rounded-pill bg-indigo-500/10 text-primary">
-              {mod.group} • Phase {mod.phase}
-            </span>
-            <h1 className="text-base font-bold text-ink">{mod.name}</h1>
-            <span className="text-xs text-ink-2 hidden xl:inline">— {mod.key_rules}</span>
-          </div>
-          <div className="flex flex-wrap gap-1 pt-0.5">
-            {mod.submodules.map((sub) => (
-              <span
-                key={sub}
-                className="px-1.5 py-0.2 text-[10px] font-medium rounded bg-white/70 border border-white/90 text-ink-2"
+    <ModulePermissionContext.Provider
+      value={{
+        canView,
+        canCreate,
+        canEdit,
+        canDelete,
+        onEditRow: canEdit ? handleOpenEditRow : undefined,
+        onDeleteRow: canDelete ? handleDeleteRow : undefined,
+      }}
+    >
+      <div className="h-full flex flex-col gap-3 overflow-y-auto pr-0.5">
+        {toastMessage && (
+          <div className="fixed bottom-6 right-6 z-50 glass-strong px-4 py-3 border-l-4 border-l-primary text-xs font-semibold text-ink shadow-xl flex items-center gap-3">
+            <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+            <span>{toastMessage}</span>
+            {undoAction && canDelete && (
+              <button
+                onClick={() => {
+                  undoAction();
+                  setUndoAction(null);
+                  setToastMessage(null);
+                }}
+                className="px-2 py-0.5 rounded bg-indigo-500/15 text-primary font-bold hover:bg-indigo-500/25"
               >
-                {sub}
-              </span>
-            ))}
+                Undo
+              </button>
+            )}
           </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="ghost" size="sm" onClick={loadModuleData}>
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span>Refresh</span>
-          </Button>
-          <Button size="sm" onClick={() => setDrawerOpen(true)}>
-            <Plus className="w-3.5 h-3.5" />
-            <span>New Record</span>
-          </Button>
-        </div>
-      </GlassCard>
+        )}
+
+        {/* Module Header Banner */}
+        <GlassCard className="shrink-0 py-2.5 px-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-0.5 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2 py-0.5 text-[11px] font-bold rounded-pill bg-primary text-white">
+                Module #{mod.number}
+              </span>
+              <span className="px-2 py-0.5 text-[11px] font-semibold rounded-pill bg-indigo-500/10 text-primary">
+                {mod.group} • Phase {mod.phase}
+              </span>
+              <h1 className="text-base font-bold text-ink">{mod.name}</h1>
+              <span className="text-xs text-ink-2 hidden xl:inline">— {mod.key_rules}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1 pt-0.5">
+              {mod.submodules.map((sub) => (
+                <span
+                  key={sub}
+                  className="px-1.5 py-0.2 text-[10px] font-medium rounded bg-white/70 border border-white/90 text-ink-2"
+                >
+                  {sub}
+                </span>
+              ))}
+              <span className="mx-1 text-slate-300">|</span>
+              <span className="text-[10px] font-bold text-ink-2">
+                {userRoleName} Permissions:
+              </span>
+              {(["view", "create", "edit", "delete"] as const).map((act) => {
+                const granted = allowedActionSet.has(act);
+                return (
+                  <span
+                    key={act}
+                    className={`px-1.5 py-0.2 text-[9px] font-extrabold uppercase rounded border ${
+                      granted
+                        ? "bg-emerald-500/15 text-emerald-800 border-emerald-500/30"
+                        : "bg-slate-200/70 text-slate-400 border-slate-300/60 line-through"
+                    }`}
+                  >
+                    {act}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {canView && (
+              <Button variant="ghost" size="sm" onClick={loadModuleData}>
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+                <span>Refresh</span>
+              </Button>
+            )}
+            {canView && canCreate && moduleNumber !== 43 && (
+              <Button size="sm" onClick={() => setDrawerOpen(true)}>
+                <Plus className="w-3.5 h-3.5" />
+                <span>New Record</span>
+              </Button>
+            )}
+          </div>
+        </GlassCard>
+
+        {!canView ? (
+          <GlassPanel className="p-8 text-center space-y-3 my-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/25 text-red-600 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+            <h2 className="text-base font-bold text-ink">
+              Access Restricted — Module #{mod.number} ({mod.name})
+            </h2>
+            <p className="text-xs text-ink-2 max-w-md mx-auto">
+              Your current role (<strong>{userRoleName}</strong>) does not have{" "}
+              <code>VIEW</code> permission for this module. Ask a{" "}
+              <strong>Super Admin</strong> or <strong>Admin</strong> to grant{" "}
+              <code>VIEW</code> access in{" "}
+              <strong>Module #43 (Roles &amp; Permissions)</strong>.
+            </p>
+          </GlassPanel>
+        ) : (
+          <>
 
       {/* MODULE 1: MANAGEMENT DASHBOARD */}
       {moduleNumber === 1 && dashboardData && (
@@ -763,11 +1039,14 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                 <div className="flex items-center gap-4">
                   <Avatar name={currentEmp.full_name} size="lg" />
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="text-lg font-bold text-ink">
                         {currentEmp.full_name}
                       </h2>
                       <StatusPill status={currentEmp.employment_status} />
+                      <span className="px-2 py-0.5 rounded-pill text-[10px] font-bold bg-indigo-500/15 text-indigo-700 border border-indigo-500/30">
+                        Role: {currentEmp.role_name || "User"}
+                      </span>
                     </div>
                     <p className="text-sm font-medium text-ink-2">
                       {currentEmp.full_name_bn}
@@ -874,6 +1153,15 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                 { key: "company_name", header: "Company" },
                 { key: "department_name", header: "Department" },
                 { key: "designation_title", header: "Designation" },
+                {
+                  key: "role_name",
+                  header: "Assigned Role",
+                  render: (r) => (
+                    <span className="px-2 py-0.5 rounded-pill text-[11px] font-bold bg-indigo-500/10 text-indigo-700 border border-indigo-500/25">
+                      {r.role_name || "User"}
+                    </span>
+                  ),
+                },
                 { key: "national_id_masked", header: "NID (Masked)" },
                 {
                   key: "gross_salary_display",
@@ -1062,15 +1350,21 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                     header: "Action",
                     render: (r) =>
                       r.status !== "APPROVED" ? (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            handleAdvanceAttendanceSummary(r.id, r.nis_days)
-                          }
-                        >
-                          Confirm & Approve
-                        </Button>
+                        canEdit ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              handleAdvanceAttendanceSummary(r.id, r.nis_days)
+                            }
+                          >
+                            Confirm & Approve
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted font-medium">
+                            View Only
+                          </span>
+                        )
                       ) : (
                         <span className="text-xs text-emerald-700 font-semibold">
                           Locked for Payroll
@@ -1255,9 +1549,15 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                   header: "Manager Action",
                   render: (r) =>
                     r.status !== "APPROVED" ? (
-                      <Button size="sm" onClick={() => handleApproveLeave(r.id)}>
-                        Approve Leave
-                      </Button>
+                      canEdit ? (
+                        <Button size="sm" onClick={() => handleApproveLeave(r.id)}>
+                          Approve Leave
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted font-medium">
+                          Pending Manager
+                        </span>
+                      )
                     ) : (
                       <span className="text-xs text-emerald-700 font-semibold">
                         Posted to Ledger
@@ -1434,7 +1734,7 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                     steps={["DRAFT", "VALIDATED", "APPROVED", "LOCKED"]}
                     currentStep={payrollRuns[0].status}
                   />
-                  {payrollRuns[0].status !== "LOCKED" && (
+                  {payrollRuns[0].status !== "LOCKED" && canEdit && (
                     <Button
                       size="sm"
                       variant="primary"
@@ -1964,21 +2264,27 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                 <MapPin className="w-4 h-4 text-primary" />
                 <span>Gulshan Corporate HQ (9:00 AM - 6:00 PM Shift)</span>
               </p>
-              <div className="flex items-center gap-2 pt-1">
-                <Button
-                  className="flex-1"
-                  onClick={() => handleMobileCheckIn("IN")}
-                >
-                  Check In Now
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="flex-1"
-                  onClick={() => handleMobileCheckIn("OUT")}
-                >
-                  Check Out
-                </Button>
-              </div>
+              {canCreate ? (
+                <div className="flex items-center gap-2 pt-1">
+                  <Button
+                    className="flex-1"
+                    onClick={() => handleMobileCheckIn("IN")}
+                  >
+                    Check In Now
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="flex-1"
+                    onClick={() => handleMobileCheckIn("OUT")}
+                  >
+                    Check Out
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted pt-1">
+                  Check-in creation is disabled for your current role permissions.
+                </p>
+              )}
             </GlassCard>
 
             <GlassCard className="space-y-2">
@@ -2104,27 +2410,31 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
               header: "Decision (Mandatory Rejection Reason)",
               render: (r) =>
                 r.status !== "APPROVED" && r.status !== "REJECTED" ? (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        handleWorkflowDecision(
-                          r.id,
-                          "APPROVED",
-                          "Approved via Workflow Inbox"
-                        )
-                      }
-                    >
-                      Approve
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => setRejectModalApproval(r)}
-                    >
-                      Reject
-                    </Button>
-                  </div>
+                  canEdit ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          handleWorkflowDecision(
+                            r.id,
+                            "APPROVED",
+                            "Approved via Workflow Inbox"
+                          )
+                        }
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => setRejectModalApproval(r)}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted">View Only</span>
+                  )
                 ) : (
                   <span className="text-xs text-muted">
                     {r.rejection_reason || "Completed"}
@@ -2257,9 +2567,11 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
                 Keys are SHA-256 hashed at rest, scoped by module, and shown only once upon creation.
               </p>
             </div>
-            <Button size="sm" onClick={handleGenerateApiKey}>
-              Generate Scoped API Key
-            </Button>
+            {canCreate && (
+              <Button size="sm" onClick={handleGenerateApiKey}>
+                Generate Scoped API Key
+              </Button>
+            )}
           </GlassCard>
 
           {newRawKey && (
@@ -2348,6 +2660,84 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
           />
         </div>
       )}
+
+      {/* MODULE 43: ROLES & PERMISSIONS MATRIX (SUPER ADMIN & ADMIN ONLY) */}
+      {moduleNumber === 43 && (
+        <RolesPermissionsMatrixView
+          onNotify={notify}
+          onPermissionsChanged={onPermissionsChanged}
+        />
+      )}
+      </>
+      )}
+
+      {/* Quick Edit Record Modal (Gated by EDIT permission) */}
+      <Modal
+        open={Boolean(editingRow && canEdit)}
+        title={`Edit Record — ${mod.name}`}
+        onClose={() => setEditingRow(null)}
+      >
+        {editingRow && (
+          <form onSubmit={handleSaveEditRow} className="space-y-3 text-xs">
+            <div className="max-h-[55vh] overflow-y-auto space-y-2.5 pr-1">
+              {Object.entries(editFormValues).map(([key, val]) => {
+                const label = key
+                  .replace(/_/g, " ")
+                  .replace(/\b\w/g, (c) => c.toUpperCase());
+                if (typeof val === "boolean") {
+                  return (
+                    <label
+                      key={key}
+                      className="flex items-center justify-between gap-2 p-2 rounded-control bg-white/80 border border-slate-200 cursor-pointer"
+                    >
+                      <span className="font-semibold text-ink">{label}</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(val)}
+                        onChange={(e) =>
+                          setEditFormValues((prev) => ({
+                            ...prev,
+                            [key]: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </label>
+                  );
+                }
+                return (
+                  <Input
+                    key={key}
+                    label={label}
+                    value={String(val ?? "")}
+                    onChange={(e) =>
+                      setEditFormValues((prev) => ({
+                        ...prev,
+                        [key]:
+                          typeof val === "number"
+                            ? Number(e.target.value)
+                            : e.target.value,
+                      }))
+                    }
+                  />
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200/80">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setEditingRow(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={savingEdit}>
+                {savingEdit ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Mandatory Rejection Reason Modal (Module 37) */}
       <Modal
@@ -2498,7 +2888,7 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
 
       {/* Module-Aware Create Drawer */}
       <ModuleCreateDrawer
-        open={drawerOpen}
+        open={drawerOpen && canCreate}
         onClose={() => setDrawerOpen(false)}
         moduleNumber={moduleNumber}
         moduleName={mod.name}
@@ -2509,7 +2899,7 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
         branches={branches}
         departments={departments}
         onSuccess={(message, undoDeleteUrl) => {
-          if (undoDeleteUrl) {
+          if (undoDeleteUrl && canDelete) {
             setUndoAction(() => async () => {
               await apiFetch(undoDeleteUrl, { method: "DELETE" });
               loadModuleData();
@@ -2519,8 +2909,12 @@ export const ModuleWorkspace: React.FC<WorkspaceProps> = ({
           }
           notify(message);
           loadModuleData();
+          if (moduleNumber === 3 || moduleNumber === 39 || moduleNumber === 43) {
+            onPermissionsChanged?.();
+          }
         }}
       />
-    </div>
+      </div>
+    </ModulePermissionContext.Provider>
   );
 };

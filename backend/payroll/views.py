@@ -402,7 +402,7 @@ class PayrollRunViewSet(CompanyScopedViewSetMixin, viewsets.ModelViewSet):
         return Response(PayrollRunSerializer(locked).data, status=status.HTTP_200_OK)
 
 
-class PayslipViewSet(CompanyScopedViewSetMixin, viewsets.ReadOnlyModelViewSet):
+class PayslipViewSet(CompanyScopedViewSetMixin, viewsets.ModelViewSet):
     serializer_class = PayslipSerializer
     permission_classes = [IsAuthenticated, IsTenantMemberAndModuleEnabled]
     module_number = 22

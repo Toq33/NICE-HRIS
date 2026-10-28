@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import Role, RolePermission, User
+from accounts.models import DataScope, Role, RolePermission, User
 from core.context import tenant_context
 from integrations.models import IntegrationConnectorConfig, OAuth2Client, WebhookEndpoint
 from organization.models import (
@@ -39,7 +39,7 @@ from payroll.models import (
     TaxSlab,
 )
 from payroll.services import generate_company_payroll_run
-from platform_admin.models import Plan, Tenant
+from platform_admin.models import EnabledModule, Plan, Tenant
 from platform_admin.registry import ALL_42_MODULES
 from platform_admin.services import provision_tenant
 from system_settings.models import Attachment, AuditLog, NumberSequence, TenantSetting
@@ -156,11 +156,11 @@ class Command(BaseCommand):
             },
         )
 
-        # Platform Superadmin
-        platform_admin, created = User.objects.get_or_create(
+        # Platform Superadmin (Super Admin)
+        platform_admin, created = User.objects.update_or_create(
             email="platform.admin@nicehris.bd",
             defaults={
-                "full_name": "Tariqul Islam (Platform Admin)",
+                "full_name": "Tariqul Islam (Super Admin)",
                 "full_name_bn": "তারিকুল ইসলাম",
                 "is_platform_admin": True,
                 "is_staff": True,
@@ -210,7 +210,13 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Demo seed completed! Both Single-Company and Multi-Company tenants ready."))
 
     def _backfill_new_tables_if_needed(self, tenant: Tenant) -> None:
+        EnabledModule.objects.update_or_create(
+            tenant=tenant,
+            module_number=43,
+            defaults={"module_slug": "roles-permissions-matrix", "is_enabled": True},
+        )
         with tenant_context(tenant):
+            self._ensure_seven_role_tabs_and_employee_roles(tenant)
             OAuth2Client.objects.get_or_create(
                 client_id=f"nhris_cid_{tenant.slug}_erp",
                 defaults={
@@ -464,6 +470,7 @@ class Command(BaseCommand):
                     )
 
             self._seed_all_modules_for_company(tenant, company, created_employees, depts, designations)
+            self._ensure_seven_role_tabs_and_employee_roles(tenant)
 
     def _populate_multi_company_tenant(self, tenant: Tenant) -> None:
         with tenant_context(tenant):
@@ -612,6 +619,7 @@ class Command(BaseCommand):
                     global_idx += 1
 
                 self._seed_all_modules_for_company(tenant, comp, comp_employees, [d1, d2, d3], [des1, des2])
+            self._ensure_seven_role_tabs_and_employee_roles(tenant)
 
     def _seed_all_modules_for_company(
         self,
@@ -1285,46 +1293,7 @@ class Command(BaseCommand):
             },
         )
 
-        hr_role, _ = Role.objects.get_or_create(
-            code="hr-director",
-            defaults={
-                "name": "HR & Payroll Administrator",
-                "description": "Full access to HR, organization, attendance, payroll, and confidential salary data.",
-                "is_system_role": True,
-                "can_view_confidential_salary": True,
-                "can_view_confidential_medical": True,
-                "has_approval_authority": True,
-            },
-        )
-        Role.objects.get_or_create(
-            code="line-manager",
-            defaults={
-                "name": "Department / Line Manager",
-                "description": "Manager Self-Service access for own + direct reports with approval authority.",
-                "is_system_role": True,
-                "can_view_confidential_salary": False,
-                "can_view_confidential_medical": False,
-                "has_approval_authority": True,
-            },
-        )
-        Role.objects.get_or_create(
-            code="employee-ess",
-            defaults={
-                "name": "Employee Self-Service",
-                "description": "Access to own profile, attendance check-in, leave applications, payslips, and PF statement.",
-                "is_system_role": True,
-                "can_view_confidential_salary": False,
-                "can_view_confidential_medical": False,
-                "has_approval_authority": False,
-            },
-        )
-
-        for mod_num in range(1, 43):
-            RolePermission.objects.get_or_create(
-                role=hr_role,
-                module_number=mod_num,
-                defaults={"actions": ["view", "create", "edit", "delete", "approve", "export"]},
-            )
+        self._ensure_seven_role_tabs_and_employee_roles(tenant)
 
         IntegrationConnectorConfig.objects.get_or_create(
             connector_code="csv_json",
@@ -1369,3 +1338,218 @@ class Command(BaseCommand):
                 "companies": [c.name for c in companies],
             },
         )
+
+    def _ensure_seven_role_tabs_and_employee_roles(self, tenant: Tenant) -> None:
+        """Seeds the 7 standard role tabs (Super Admin, Admin, Manager, Asst. Manager, Developer, Support, User)
+        and links employees and users to their corresponding roles.
+        """
+        # Clean up legacy role codes if present so the 7 role tabs match the design cleanly
+        Role.objects.filter(code__in=["hr-director", "line-manager", "employee-ess"]).delete()
+
+        role_specs = [
+            {
+                "code": "super-admin",
+                "name": "Super Admin",
+                "badge_label": "System Superuser",
+                "description": "Platform-wide superuser with unrestricted access to all 43 modules, tenants, and system settings",
+                "display_order": 1,
+                "salary": True,
+                "medical": True,
+                "approval": True,
+                "all_modules": True,
+                "modules": {},
+            },
+            {
+                "code": "admin",
+                "name": "Admin",
+                "badge_label": "Workspace Admin",
+                "description": "Workspace-wide settings, user invites, full 43-module access, and permission matrix administration",
+                "display_order": 2,
+                "salary": True,
+                "medical": True,
+                "approval": True,
+                "all_modules": True,
+                "modules": {},
+            },
+            {
+                "code": "manager",
+                "name": "Manager",
+                "badge_label": "Department Lead",
+                "description": "Departmental workforce planning, attendance & leave approvals, performance appraisals, and team reports",
+                "display_order": 3,
+                "salary": False,
+                "medical": False,
+                "approval": True,
+                "all_modules": False,
+                "modules": {
+                    m: ["view", "create", "edit", "delete"]
+                    for m in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 28, 33, 34, 35, 36, 37, 38]
+                },
+            },
+            {
+                "code": "asst-manager",
+                "name": "Asst. Manager",
+                "badge_label": "Team Supervisor",
+                "description": "Shift roster scheduling, daily attendance supervision, leave review, and onboarding coordination",
+                "display_order": 4,
+                "salary": False,
+                "medical": False,
+                "approval": True,
+                "all_modules": False,
+                "modules": {
+                    m: ["view", "create", "edit"]
+                    for m in [1, 3, 6, 8, 9, 10, 11, 12, 13, 25, 33, 34, 35, 36]
+                },
+            },
+            {
+                "code": "developer",
+                "name": "Developer",
+                "badge_label": "Engineering & IT",
+                "description": "API keys, webhooks, biometric/ERP integrations, system settings, and self-service portal access",
+                "display_order": 5,
+                "salary": False,
+                "medical": False,
+                "approval": False,
+                "all_modules": False,
+                "modules": {
+                    m: ["view", "create", "edit", "delete"]
+                    for m in [1, 10, 11, 13, 28, 32, 34, 35, 36, 38, 41, 42]
+                },
+            },
+            {
+                "code": "support",
+                "name": "Support",
+                "badge_label": "Helpdesk & Ops",
+                "description": "HR helpdesk ticket resolution, asset handover, policy documents, announcements, and employee directory",
+                "display_order": 6,
+                "salary": False,
+                "medical": False,
+                "approval": False,
+                "all_modules": False,
+                "modules": {
+                    m: ["view", "create", "edit", "delete"]
+                    for m in [1, 2, 3, 6, 8, 10, 11, 28, 29, 32, 34, 35, 36]
+                },
+            },
+            {
+                "code": "user",
+                "name": "User",
+                "badge_label": "Standard Employee",
+                "description": "Employee Self-Service portal, attendance check-in/out, leave applications, payslips, and helpdesk requests",
+                "display_order": 7,
+                "salary": False,
+                "medical": False,
+                "approval": False,
+                "all_modules": False,
+                "modules": {
+                    m: ["view", "create"]
+                    for m in [1, 8, 10, 11, 12, 13, 17, 18, 22, 32, 34, 35, 36]
+                },
+            },
+        ]
+
+        roles_by_code: dict[str, Role] = {}
+        for spec in role_specs:
+            role, _ = Role.objects.update_or_create(
+                code=spec["code"],
+                defaults={
+                    "name": spec["name"],
+                    "badge_label": spec["badge_label"],
+                    "description": spec["description"],
+                    "display_order": spec["display_order"],
+                    "is_system_role": True,
+                    "can_view_confidential_salary": spec["salary"],
+                    "can_view_confidential_medical": spec["medical"],
+                    "has_approval_authority": spec["approval"],
+                },
+            )
+            roles_by_code[spec["code"]] = role
+            for mod_num in range(1, 44):
+                if spec["all_modules"]:
+                    acts = ["view", "create", "edit", "delete"]
+                else:
+                    acts = spec["modules"].get(mod_num, [])
+                RolePermission.objects.update_or_create(
+                    role=role,
+                    module_number=mod_num,
+                    defaults={"actions": acts},
+                )
+
+        # Ensure demo logins exist for Asst. Manager, Developer, and Support in Jamuna Group so all 7 roles are testable
+        if tenant.slug == "jamuna-group":
+            extra_demo_specs = [
+                ("JTSL-0004", "asst.manager@jamunagroup.bd", User.ExperienceMode.MANAGER, "asst-manager"),
+                ("JTSL-0005", "developer@jamunagroup.bd", User.ExperienceMode.EMPLOYEE, "developer"),
+                ("JTSL-0006", "support@jamunagroup.bd", User.ExperienceMode.EMPLOYEE, "support"),
+            ]
+            for emp_code, demo_email, exp_mode, _role_key in extra_demo_specs:
+                emp_obj = Employee.objects.filter(employee_code=emp_code).first()
+                if emp_obj:
+                    demo_u, created_u = User.objects.update_or_create(
+                        email=demo_email,
+                        defaults={
+                            "full_name": emp_obj.full_name,
+                            "full_name_bn": emp_obj.full_name_bn,
+                            "tenant": tenant,
+                            "default_company": emp_obj.company,
+                            "experience_mode": exp_mode,
+                            "can_view_salary": False,
+                            "can_view_medical": False,
+                            "has_approval_authority": exp_mode in (User.ExperienceMode.ADMIN, User.ExperienceMode.MANAGER),
+                            "is_active": True,
+                        },
+                    )
+                    if created_u:
+                        demo_u.set_password("Pass1234!")
+                        demo_u.save()
+                    demo_u.allowed_companies.set(list(Company.objects.all()))
+                    if emp_obj.user_id != demo_u.id:
+                        emp_obj.user = demo_u
+                        Employee.unscoped_objects.filter(pk=emp_obj.pk).update(user=demo_u)
+
+        # Assign roles to existing employees and users in this tenant
+        all_emps = list(Employee.objects.select_related("user").all())
+        for idx, emp in enumerate(all_emps):
+            u_email = (emp.user.email.lower() if emp.user and emp.user.email else "")
+            if u_email.startswith("hr.admin@") or u_email.startswith("group.hr@"):
+                assigned_role = roles_by_code["admin"]
+            elif u_email.startswith("manager@") or u_email.startswith("line.manager@"):
+                assigned_role = roles_by_code["manager"]
+            elif u_email.startswith("asst.manager@"):
+                assigned_role = roles_by_code["asst-manager"]
+            elif u_email.startswith("developer@"):
+                assigned_role = roles_by_code["developer"]
+            elif u_email.startswith("support@"):
+                assigned_role = roles_by_code["support"]
+            elif u_email.startswith("employee@"):
+                assigned_role = roles_by_code["user"]
+            elif idx == 0:
+                assigned_role = roles_by_code["admin"]
+            elif idx == 1:
+                assigned_role = roles_by_code["manager"]
+            elif idx == 2:
+                assigned_role = roles_by_code["user"]
+            elif idx % 6 == 0:
+                assigned_role = roles_by_code["asst-manager"]
+            elif idx % 5 == 0:
+                assigned_role = roles_by_code["developer"]
+            elif idx % 4 == 0:
+                assigned_role = roles_by_code["support"]
+            else:
+                assigned_role = roles_by_code["user"]
+
+            if emp.role_id != assigned_role.id:
+                emp.role = assigned_role
+                Employee.unscoped_objects.filter(pk=emp.pk).update(role=assigned_role)
+
+            if emp.user_id:
+                DataScope.unscoped_objects.filter(user_id=emp.user_id).exclude(role=assigned_role).delete()
+                DataScope.unscoped_objects.update_or_create(
+                    tenant=tenant,
+                    user_id=emp.user_id,
+                    role=assigned_role,
+                    defaults={
+                        "scope_type": DataScope.ScopeType.ALL_TENANT,
+                        "company_ids": [str(emp.company_id)],
+                    },
+                )

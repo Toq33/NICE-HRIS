@@ -1,6 +1,8 @@
 """API views for authentication, demo persona switching, and Module 39 (Users, Roles & Permissions)."""
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -11,7 +13,7 @@ from core.context import get_current_tenant_id
 from core.permissions import IsTenantMemberAndModuleEnabled
 from core.throttling import LoginRateThrottle
 
-from .models import DataScope, LoginHistory, Role, User
+from .models import DataScope, LoginHistory, Role, RolePermission, User
 from .serializers import (
     DataScopeSerializer,
     LoginHistorySerializer,
@@ -19,7 +21,12 @@ from .serializers import (
     RoleSerializer,
     UserSerializer,
 )
-from .services import authenticate_and_issue_tokens, build_session_context
+from .services import (
+    authenticate_and_issue_tokens,
+    build_session_context,
+    get_user_primary_role,
+    is_super_admin_or_admin,
+)
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
@@ -40,6 +47,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
 
 
 class LoginView(APIView):
+    authentication_classes: list = []
     permission_classes = [AllowAny]
     throttle_classes = [LoginRateThrottle]
     serializer_class = LoginSerializer
@@ -69,6 +77,7 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
+    authentication_classes: list = []
     permission_classes = [AllowAny]
     serializer_class = serializers.Serializer
 
@@ -91,8 +100,9 @@ class MeView(APIView):
 
 
 class DemoPersonaListView(APIView):
-    """Returns pre-seeded demo accounts (Platform Admin, Single-Company Tenant, Multi-Company Tenant) for quick switching."""
+    """Returns pre-seeded demo accounts (Super Admin, Admin, Single-Company Tenant, Multi-Company Tenant) for quick switching."""
 
+    authentication_classes: list = []
     permission_classes = [AllowAny]
     serializer_class = serializers.Serializer
 
@@ -103,20 +113,32 @@ class DemoPersonaListView(APIView):
             .filter(is_active=True)
             .order_by("-is_platform_admin", "tenant__name", "experience_mode")
         )
-        personas = [
-            {
-                "id": str(u.id),
-                "email": u.email,
-                "full_name": u.full_name,
-                "full_name_bn": u.full_name_bn,
-                "experience_mode": u.experience_mode,
-                "is_platform_admin": u.is_platform_admin,
-                "tenant_name": u.tenant.name if u.tenant else "Platform Admin (All Tenants)",
-                "tenant_slug": u.tenant.slug if u.tenant else "platform",
-                "multi_company_enabled": u.tenant.multi_company_enabled if u.tenant else False,
-            }
-            for u in users
-        ]
+        personas = []
+        for u in users:
+            role = get_user_primary_role(u)
+            role_label = (
+                "Super Admin"
+                if u.is_platform_admin
+                else (role.name if role else ("Admin" if u.experience_mode == "ADMIN" else u.experience_mode))
+            )
+            personas.append(
+                {
+                    "id": str(u.id),
+                    "email": u.email,
+                    "full_name": u.full_name,
+                    "full_name_bn": u.full_name_bn,
+                    "experience_mode": u.experience_mode,
+                    "role_name": role_label,
+                    "is_platform_admin": u.is_platform_admin,
+                    "tenant_name": (
+                        "Super Admin (All Modules & Tenants)"
+                        if u.is_platform_admin
+                        else (u.tenant.name if u.tenant else "Super Admin (All Modules)")
+                    ),
+                    "tenant_slug": u.tenant.slug if u.tenant else "platform",
+                    "multi_company_enabled": u.tenant.multi_company_enabled if u.tenant else True,
+                }
+            )
         return Response({"personas": personas})
 
     @extend_schema(summary="Switch to a demo persona and issue tokens")
@@ -156,7 +178,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 class RoleViewSet(viewsets.ModelViewSet):
-    """Tenant-scoped Role management (Module 39)."""
+    """Tenant-scoped Role & Permission Matrix management (Modules 39 & 43)."""
 
     serializer_class = RoleSerializer
     permission_classes = [IsAuthenticated, IsTenantMemberAndModuleEnabled]
@@ -164,6 +186,120 @@ class RoleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Role.objects.prefetch_related("permissions").all()
+
+    def _require_admin(self, request: Request) -> None:
+        if not is_super_admin_or_admin(request.user):
+            raise PermissionDenied("Only Super Admin and Admin can create or modify roles and permissions.")
+
+    def perform_create(self, serializer: RoleSerializer) -> None:
+        self._require_admin(self.request)
+        serializer.save()
+
+    def perform_update(self, serializer: RoleSerializer) -> None:
+        self._require_admin(self.request)
+        serializer.save()
+
+    def perform_destroy(self, instance: Role) -> None:
+        self._require_admin(self.request)
+        if instance.code in ("super-admin", "admin"):
+            raise PermissionDenied("Core administrative roles ('Super Admin' and 'Admin') cannot be deleted.")
+
+        from organization.models import Employee
+
+        # Reassign any employees holding this role to the fallback 'user' role
+        default_user_role = Role.unscoped_objects.filter(
+            tenant_id=instance.tenant_id, code="user"
+        ).first()
+        if default_user_role:
+            Employee.unscoped_objects.filter(role=instance).update(role=default_user_role)
+            DataScope.unscoped_objects.filter(role=instance).update(role=default_user_role)
+        else:
+            Employee.unscoped_objects.filter(role=instance).update(role=None)
+            DataScope.unscoped_objects.filter(role=instance).delete()
+
+        from django.utils import timezone
+
+        code_to_delete = instance.code
+        super().perform_destroy(instance)
+        now = timezone.now()
+        Role.unscoped_objects.filter(code=code_to_delete).update(deleted_at=now, is_active=False)
+        RolePermission.unscoped_objects.filter(role__code=code_to_delete).update(
+            deleted_at=now, is_active=False
+        )
+
+    @action(detail=True, methods=["post"], url_path="toggle-permission")
+    def toggle_permission(self, request: Request, pk: str | None = None) -> Response:
+        """Toggle a single action ('view', 'create', 'edit', 'delete') on a module for this role."""
+        self._require_admin(request)
+        role = self.get_object()
+        module_number = int(request.data.get("module_number", 1))
+        action_name = str(request.data.get("action", "view")).lower()
+        if action_name not in ("view", "create", "edit", "delete"):
+            return Response(
+                {"error": {"code": "invalid_action", "message": "Action must be view, create, edit, or delete."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        perm = RolePermission.unscoped_objects.filter(
+            role=role,
+            module_number=module_number,
+            deleted_at__isnull=True,
+        ).first()
+        if not perm:
+            perm = RolePermission.unscoped_objects.create(
+                tenant_id=role.tenant_id,
+                role=role,
+                module_number=module_number,
+                actions=[],
+            )
+        current_actions = [a.lower() for a in (perm.actions or [])]
+        if action_name in current_actions:
+            if action_name == "view":
+                # Turning off 'view' revokes all actions on that module so the role cannot see or mutate it
+                current_actions = []
+            else:
+                current_actions = [a for a in current_actions if a != action_name]
+        else:
+            current_actions.append(action_name)
+            # Enabling create/edit/delete automatically ensures 'view' is also enabled
+            if action_name in ("create", "edit", "delete") and "view" not in current_actions:
+                current_actions.insert(0, "view")
+
+        # Keep canonical order: view, create, edit, delete
+        ordered_actions = [a for a in ("view", "create", "edit", "delete") if a in current_actions]
+
+        # Sync across all Role records with the same code across tenants
+        matching_roles = list(Role.unscoped_objects.filter(code=role.code, deleted_at__isnull=True))
+        for r in matching_roles:
+            RolePermission.unscoped_objects.update_or_create(
+                tenant_id=r.tenant_id,
+                role=r,
+                module_number=module_number,
+                defaults={"actions": list(ordered_actions)},
+            )
+        role.refresh_from_db()
+        return Response(RoleSerializer(role).data)
+
+    @action(detail=True, methods=["post"], url_path="bulk-group-permissions")
+    def bulk_group_permissions(self, request: Request, pk: str | None = None) -> Response:
+        """Grant All or Revoke All actions across a list of module_numbers for this role."""
+        self._require_admin(request)
+        role = self.get_object()
+        module_numbers = request.data.get("module_numbers", [])
+        grant = bool(request.data.get("grant", True))
+        target_actions = ["view", "create", "edit", "delete"] if grant else []
+
+        matching_roles = list(Role.unscoped_objects.filter(code=role.code, deleted_at__isnull=True))
+        for r in matching_roles:
+            for mod_num in module_numbers:
+                RolePermission.unscoped_objects.update_or_create(
+                    tenant_id=r.tenant_id,
+                    role=r,
+                    module_number=int(mod_num),
+                    defaults={"actions": list(target_actions)},
+                )
+        role.refresh_from_db()
+        return Response(RoleSerializer(role).data)
 
 
 class DataScopeViewSet(viewsets.ModelViewSet):
